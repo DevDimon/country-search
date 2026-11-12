@@ -9,12 +9,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc -p tsconfig.build.json",
-    "prepare": "husky"
+    "prepare": "husky",
+    "predeploy": "npm run build && node predeploy.mjs",
+    "deploy": "gh-pages -d dist"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
     "eslint": "^9.13.0",
     "eslint-config-prettier": "^9.1.0",
+    "gh-pages": "^6.3.0",
     "husky": "^9.1.6",
     "lint-staged": "^15.2.10",
     "prettier": "^3.3.3",
