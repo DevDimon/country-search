@@ -10,7 +10,7 @@ cpSync(resolve(root, 'styles.css'), resolve(dist, 'styles.css'));
 
 const indexPath = resolve(dist, 'index.html');
 const html = readFileSync(indexPath, 'utf8').replaceAll(
-  './dist/ui/main.js',
-  './ui/main.js',
+  './dist/main.js',
+  './main.js',
 );
 writeFileSync(indexPath, html);
