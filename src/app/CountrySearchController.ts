@@ -2,6 +2,7 @@ import { HttpError } from '../api/HttpError.js';
 import type { Country } from '../types.js';
 import { debounce, type DebouncedFunction } from '../utils/debounce.js';
 import { isAbortError, isTimeoutError } from '../utils/errors.js';
+import { createTimedSignal } from '../utils/signals.js';
 
 export type SearchState =
   | { status: 'idle' }
@@ -18,6 +19,11 @@ export interface CountrySearchControllerOptions {
   timeoutMs?: number;
 }
 
+interface ActiveRequest {
+  controller: AbortController;
+  dispose: () => void;
+}
+
 const DEFAULT_DEBOUNCE_MS = 350;
 const DEFAULT_TIMEOUT_MS = 8_000;
 
@@ -27,14 +33,14 @@ export class CountrySearchController {
   private readonly search: SearchFn;
   private readonly timeoutMs: number;
   private readonly debounced: DebouncedFunction<[string]>;
-  private requestId = 0; // ← replaces the real abort for now
+  private active: ActiveRequest | null = null;
   private lastQuery = '';
 
   constructor(options: CountrySearchControllerOptions) {
     this.search = options.search;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.debounced = debounce((query: string) => {
-      void this.runSearch(query);
+    this.debounced = debounce((q: string) => {
+      void this.runSearch(q);
     }, options.debounceMs ?? DEFAULT_DEBOUNCE_MS);
   }
 
@@ -52,7 +58,8 @@ export class CountrySearchController {
 
   setQuery(rawQuery: string): void {
     this.lastQuery = rawQuery;
-    this.requestId += 1;
+    this.cancelActive();
+
     const query = rawQuery.trim();
     if (query.length === 0) {
       this.debounced.cancel();
@@ -66,31 +73,39 @@ export class CountrySearchController {
   retry(): void {
     const query = this.lastQuery.trim();
     if (query.length === 0) return;
+    this.cancelActive();
     this.debounced.cancel();
     void this.runSearch(query);
   }
 
   dispose(): void {
-    this.requestId += 1;
+    this.cancelActive();
     this.debounced.cancel();
     this.listeners.clear();
   }
 
+  private cancelActive(): void {
+    if (!this.active) return;
+    this.active.dispose();
+    this.active.controller.abort();
+    this.active = null;
+  }
+
   private async runSearch(query: string): Promise<void> {
-    const id = ++this.requestId;
-    const timeoutController = new AbortController();
-    const timer = setTimeout(() => {
-      timeoutController.abort(new DOMException('The request timed out', 'TimeoutError'));
-    }, this.timeoutMs);
+    const controller = new AbortController();
+    const timed = createTimedSignal(controller.signal, this.timeoutMs);
+    const request: ActiveRequest = { controller, dispose: timed.dispose };
+    this.active = request;
+    this.setState({ status: 'loading', query });
 
     try {
-      const countries = await this.search(query, timeoutController.signal);
-      if (id !== this.requestId) return;
+      const countries = await this.search(query, timed.signal);
+      if (this.active !== request) return;
       this.setState(
         countries.length > 0 ? { status: 'success', query, countries } : { status: 'empty', query },
       );
     } catch (error) {
-      if (id !== this.requestId) return;
+      if (this.active !== request) return;
       if (isAbortError(error)) return;
       if (isTimeoutError(error)) {
         this.setState({
@@ -121,7 +136,10 @@ export class CountrySearchController {
         message: 'Network error. Check your connection and try again.',
       });
     } finally {
-      clearTimeout(timer);
+      if (this.active === request) {
+        request.dispose();
+        this.active = null;
+      }
     }
   }
 
